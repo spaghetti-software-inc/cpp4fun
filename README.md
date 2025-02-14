@@ -1,6 +1,13 @@
 # cpp4fun
 random C++ projects for fun. what should we build? candidates:
 
+## how to build the project
+conan install . --output-folder=build --build=missing
+cd build
+
+cmake .. -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Debug 
+
+
 ## 3D Graphics 
 3D graphics is fun. It is even used to make video games. Video games are also fun. 
 
@@ -9,6 +16,7 @@ Eye candy. Nice things to look at, for fun.
 
 ### how?
 CUDA and OpenGL
+
 
 ### why aren't you using Rust?
 Because C++ is better than Rust.
