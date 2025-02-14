@@ -16,5 +16,6 @@ cmake --build . -j20
 ./tests/tests
 ./src/cpp4fun/cpp4fun
 ./src/particles/particles
+./src/cudaGL/cudaGL
 
 
