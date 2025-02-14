@@ -10,6 +10,15 @@
 #include <GL/wglew.h>
 #endif
 
+#include <iostream>
+#include <memory>
+#include <vector>
+
+#include "Renderer.h"
+
+
+std::unique_ptr<Renderer> renderer = nullptr;
+
 // #include <cuda_runtime.h>
 // #include <cuda_gl_interop.h>
 // #include <helper_cuda.h>
@@ -82,7 +91,9 @@ int main(int argc, char **argv) {
 #if defined(__linux__)
     setenv("DISPLAY", ":0", 0);
 #endif
-  
+    
+    renderer = std::make_unique<Renderer>();
+
     // 1st initialize OpenGL context, so we can properly set the GL for CUDA.
     // This is needed to achieve optimal performance with OpenGL/CUDA interop.
     initGL(&argc, argv);
