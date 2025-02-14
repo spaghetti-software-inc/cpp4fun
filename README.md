@@ -2,11 +2,10 @@
 random C++ projects for fun. what should we build? candidates:
 
 ## how to build the project
-conan install . --output-folder=build --build=missing
-cd build
+* Download and install the [CUDA Toolkit 12.4](https://developer.nvidia.com/cuda-downloads) for your corresponding platform. For system requirements and installation instructions of cuda toolkit, please refer to the [Linux Installation Guide](http://docs.nvidia.com/cuda/cuda-installation-guide-linux/), and the [Windows Installation Guide](http://docs.nvidia.com/cuda/cuda-installation-guide-microsoft-windows/index.html).
 
-cmake .. -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Debug 
 
+run ci_test_example.sh
 
 ## 3D Graphics 
 3D graphics is fun. It is even used to make video games. Video games are also fun. 

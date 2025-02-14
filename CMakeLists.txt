@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.15)
-project(cpp4fun CXX)
+project(cpp4fun CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -14,6 +14,26 @@ set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
 
 find_package(ZLIB REQUIRED)
+
+
+
+add_library(particles STATIC
+  src/randomize.cpp
+  src/randomize.h
+  src/particle.cu
+  src/particle.h
+  src/v3.cu
+  src/v3.h
+  )
+
+set_target_properties( particles
+                       PROPERTIES CUDA_SEPARABLE_COMPILATION ON
+                      )
+
+add_executable(particle_test src/test.cu)
+
+set_target_properties(particle_test PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+target_link_libraries(particle_test PRIVATE particles)
 
 
 add_executable(${PROJECT_NAME} src/main.cpp)
