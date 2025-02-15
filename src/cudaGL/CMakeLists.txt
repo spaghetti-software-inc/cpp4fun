@@ -19,7 +19,6 @@ include_directories(
 # Source files
 set(SOURCE_FILES
     main.cpp
-    Renderer.cpp
 )
 
 

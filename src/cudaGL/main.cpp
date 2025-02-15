@@ -10,12 +10,60 @@
 #include <GL/wglew.h>
 #endif
 
+
+// includes, cuda
+#include <cuda_runtime.h>
+#include <cuda_gl_interop.h>
+
+// Utilities and timing functions
+#include <helper_functions.h>    // includes cuda.h and cuda_runtime_api.h
+
+
+// CUDA helper functions
+#include <helper_cuda.h>         // helper functions for CUDA error check
+
+#include "Renderer.h"
+
+
+
 #include <iostream>
 #include <memory>
 #include <vector>
 
 
 #include "Renderer.h"
+
+
+Renderer::Renderer() {
+  checkCudaErrors(cudaMalloc((void **)&_d_vbo_buffer, _mesh_width*_mesh_height*4*sizeof(float)));
+
+  assert(&_vbo);
+
+  // create buffer object
+  glGenBuffers(1, &_vbo);
+  glBindBuffer(GL_ARRAY_BUFFER, _vbo);
+
+  // initialize buffer object
+  unsigned int size = _mesh_width * _mesh_height * 4 * sizeof(float);
+  glBufferData(GL_ARRAY_BUFFER, size, 0, GL_DYNAMIC_DRAW);
+
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+  // register this buffer object with CUDA
+  checkCudaErrors(cudaGraphicsGLRegisterBuffer(&_cuda_vbo_resource, _vbo, cudaGraphicsMapFlagsWriteDiscard));
+
+  // SDK_CHECK_ERROR_GL();    
+}
+
+Renderer::~Renderer() {
+}
+
+void Renderer::render() {
+  glClearColor(0.529f, 0.808f, 0.922f, 1.0f); // Light sky blue
+  glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+}
+
+
 
 
 std::unique_ptr<Renderer> renderer = nullptr;
@@ -92,12 +140,12 @@ int main(int argc, char **argv) {
     setenv("DISPLAY", ":0", 0);
 #endif
     
-    renderer = std::make_unique<Renderer>();
 
     // 1st initialize OpenGL context, so we can properly set the GL for CUDA.
     // This is needed to achieve optimal performance with OpenGL/CUDA interop.
     initGL(&argc, argv);
   
+    
     // findCudaDevice(argc, (const char **)argv);
   
     //   // This is the normal code path for SmokeParticles
@@ -114,6 +162,7 @@ int main(int argc, char **argv) {
     //   glutSpecialFunc(special);
     //   glutIdleFunc(idle);
   
+    renderer = std::make_unique<Renderer>();
     glutMainLoop();
     return 0;
 }
