@@ -17,14 +17,4 @@ Eye candy. Nice things to look at, for fun.
 CUDA and OpenGL
 
 
-### why aren't you using Rust?
-Because C++ is better than Rust.
 
-## A New Programming Language
-Nobody needs another programming language. Canceled.
-
-## "DocuSign 2.0"
-Filling out forms. Only waiting in line is more boring than filling out forms. This is not a fun project. Canceled.
-
-## Continuous LLM Audit
-Nobody likes internal audit. Nobody likes being hated. This is not a fun project. Canceled.
