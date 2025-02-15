@@ -56,6 +56,13 @@ Renderer::Renderer() {
 }
 
 Renderer::~Renderer() {
+    // unregister this buffer object with CUDA
+    checkCudaErrors(cudaGraphicsUnregisterResource(_cuda_vbo_resource));
+
+    glBindBuffer(1, _vbo);
+    glDeleteBuffers(1, &_vbo);
+
+    _vbo = 0;
 }
 
 void Renderer::render() {
