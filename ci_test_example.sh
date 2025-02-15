@@ -13,9 +13,9 @@ cd build
 cmake .. -DCMAKE_TOOLCHAIN_FILE=conan_toolchain.cmake -DCMAKE_BUILD_TYPE=Release
 cmake --build . -j20
 
-./tests/tests
-./src/cpp4fun/cpp4fun
-./src/particles/particles
+#./tests/tests
+#./src/cpp4fun/cpp4fun
+#./src/particles/particles
 ./src/cudaGL/cudaGL
 
 

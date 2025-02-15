@@ -14,24 +14,24 @@
 #include <memory>
 #include <vector>
 
+
 #include "Renderer.h"
 
 
 std::unique_ptr<Renderer> renderer = nullptr;
 
-// #include <cuda_runtime.h>
-// #include <cuda_gl_interop.h>
-// #include <helper_cuda.h>
-
 
 
 // main rendering loop
 void display() {
-    glClearColor(0.529f, 0.808f, 0.922f, 1.0f); // Light sky blue
-    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-
+    renderer->render();
     glutSwapBuffers();
-    glutReportErrors();
+ 
+    // glClearColor(0.529f, 0.808f, 0.922f, 1.0f); // Light sky blue
+    // glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+
+    // glutSwapBuffers();
+    // glutReportErrors();
   }
 
 // GLUT callback functions
@@ -53,7 +53,7 @@ void initGL(int *argc, char **argv) {
     glutInit(argc, argv);
     glutInitDisplayMode(GLUT_RGB | GLUT_DEPTH | GLUT_DOUBLE);
     glutInitWindowSize(winWidth, winHeight);
-    glutCreateWindow("CUDA Smoke Particles");
+    glutCreateWindow("CUDA Smoke Show");
   
     if (!isGLVersionSupported(2, 0)) {
       fprintf(stderr,
@@ -105,8 +105,8 @@ int main(int argc, char **argv) {
     //   initParams();
     //   initMenus();
   
-      glutDisplayFunc(display);
-      glutReshapeFunc(reshape);
+    glutDisplayFunc(display);
+    glutReshapeFunc(reshape);
     //   glutMouseFunc(mouse);
     //   glutMotionFunc(motion);
     //   glutKeyboardFunc(key);
