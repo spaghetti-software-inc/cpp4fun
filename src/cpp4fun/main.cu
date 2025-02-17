@@ -1,68 +1,106 @@
 #include <iostream>
+#include <cmath>
 #include <GL/glew.h>
 #include <GLFW/glfw3.h>
+
 #include <cuda_runtime.h>
 #include <cuda_gl_interop.h>
+#include <curand.h>
+
+// GLM
 #include <glm/glm.hpp>
-#include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 // -----------------------------------------------------------------------------
-// CUDA kernel: generate a simple sphere with lat/lon
+// Kernel: Convert (x,y,z,rRandom) into a point on a sphere with radius ~ N(1,0.2)
 // -----------------------------------------------------------------------------
-__global__ void generateSphere(float* positions, int numLat, int numLon, float radius)
+__global__ void finalizePoints(float* data, int numPoints)
 {
-    int idx         = blockIdx.x * blockDim.x + threadIdx.x;
-    int totalPoints = numLat * numLon;
-    if (idx >= totalPoints) return;
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= numPoints) return;
 
-    int i   = idx / numLon; // lat index
-    int j   = idx % numLon; // lon index
-    float PI    = 3.1415926535f;
-    float lat   = (float)i / (numLat - 1) * PI;         // 0..PI
-    float lon   = (float)j / (numLon) * 2.0f * PI;      // 0..2PI
+    // Each point: data[4*idx + 0..3] => (x, y, z, rRandom)
+    float x = data[4*idx + 0];
+    float y = data[4*idx + 1];
+    float z = data[4*idx + 2];
+    float r = data[4*idx + 3];
 
-    float x = radius * sinf(lat) * cosf(lon);
-    float y = radius * cosf(lat);
-    float z = radius * sinf(lat) * sinf(lon);
+    // Normalize (x,y,z) => direction on unit sphere
+    float len = sqrtf(x*x + y*y + z*z);
+    if (len > 1e-7f) {
+        x /= len;
+        y /= len;
+        z /= len;
+    }
 
-    positions[3 * idx + 0] = x;
-    positions[3 * idx + 1] = y;
-    positions[3 * idx + 2] = z;
+    // Turn the random r into an actual radius. For example:
+    //   radius = abs( 1.0 + 0.2 * r )
+    // That yields a distribution centered around ~1.0 with stdev ~0.2, 
+    // clipped to be non-negative.
+    float radius = 1.0f + 0.2f * r;
+    if (radius < 0.0f) {
+        radius = -radius;  // or clamp to 0 if you prefer
+    }
+
+    // Scale direction by radius
+    x *= radius;
+    y *= radius;
+    z *= radius;
+
+    // Write back final position + store the final radius in w
+    data[4*idx + 0] = x;
+    data[4*idx + 1] = y;
+    data[4*idx + 2] = z;
+    data[4*idx + 3] = radius;
 }
 
 // -----------------------------------------------------------------------------
-// GLSL
+// GLSL Shaders
+//    - Vertex shader uses (x,y,z,r) for position and color generation
+//    - Fragment shader takes the color from the vertex shader
 // -----------------------------------------------------------------------------
 static const char* vsSource = R"(
 #version 330 core
-layout (location = 0) in vec3 inPos;
+layout (location = 0) in vec4 inPosRad; // (x, y, z, radius)
+
 uniform mat4 u_mvp;
+
+out vec4 vColor; // pass color to fragment shader
 
 void main()
 {
+    // Position
     gl_PointSize = 5.0;
-    gl_Position  = u_mvp * vec4(inPos, 1.0);
+    gl_Position  = u_mvp * vec4(inPosRad.xyz, 1.0);
+
+    // Let's color by radius: gradient from blue to red
+    float r = inPosRad.w;
+    // We'll map r in [0, 2] => clamp to avoid crazy high or negative
+    float t = clamp(r / 2.0, 0.0, 1.0);
+    // simple linear blend: (1.0 - t, 0.0, t)
+    vColor = vec4(1.0 - t, 0.0, t, 1.0);
 }
 )";
 
 static const char* fsSource = R"(
 #version 330 core
+in vec4 vColor;
 out vec4 FragColor;
 void main()
 {
-    FragColor = vec4(1, 1, 1, 1);
+    FragColor = vColor;
 }
 )";
 
 // -----------------------------------------------------------------------------
-// Compile & link shader
+// Shader utilities
 // -----------------------------------------------------------------------------
-static GLuint compileShader(GLenum type, const char* src) {
+static GLuint compileShader(GLenum type, const char* src)
+{
     GLuint s = glCreateShader(type);
     glShaderSource(s, 1, &src, nullptr);
     glCompileShader(s);
-
     GLint success;
     glGetShaderiv(s, GL_COMPILE_STATUS, &success);
     if(!success) {
@@ -73,7 +111,8 @@ static GLuint compileShader(GLenum type, const char* src) {
     return s;
 }
 
-static GLuint createShaderProgram(const char* vtx, const char* frg) {
+static GLuint createShaderProgram(const char* vtx, const char* frg)
+{
     GLuint vs = compileShader(GL_VERTEX_SHADER,   vtx);
     GLuint fs = compileShader(GL_FRAGMENT_SHADER, frg);
     GLuint prog = glCreateProgram();
@@ -94,20 +133,22 @@ static GLuint createShaderProgram(const char* vtx, const char* frg) {
 }
 
 // -----------------------------------------------------------------------------
-// Globals for camera
+// Camera + Mouse
 // -----------------------------------------------------------------------------
 static int   g_width=800, g_height=600;
 static float g_yaw=0.f, g_pitch=0.f, g_dist=4.f;
 static bool  g_lmb=false, g_rmb=false;
 static double g_lastX=0.f, g_lastY=0.f;
 
-void framebuffer_size_callback(GLFWwindow* w, int width, int height) {
+void framebufferCB(GLFWwindow* w, int width, int height)
+{
     g_width  = width;
     g_height = height;
     glViewport(0, 0, width, height);
 }
 
-void mouseButtonCB(GLFWwindow* w, int button, int action, int mods) {
+void mouseButtonCB(GLFWwindow* w, int button, int action, int mods)
+{
     if(button == GLFW_MOUSE_BUTTON_LEFT) {
         g_lmb = (action == GLFW_PRESS);
         glfwGetCursorPos(w, &g_lastX, &g_lastY);
@@ -117,7 +158,8 @@ void mouseButtonCB(GLFWwindow* w, int button, int action, int mods) {
     }
 }
 
-void cursorPosCB(GLFWwindow* w, double x, double y) {
+void cursorPosCB(GLFWwindow* w, double x, double y)
+{
     float dx = float(x) - g_lastX;
     float dy = float(y) - g_lastY;
     g_lastX  = float(x);
@@ -133,11 +175,18 @@ void cursorPosCB(GLFWwindow* w, double x, double y) {
     }
 }
 
+void scrollCB(GLFWwindow* w, double xoff, double yoff)
+{
+    g_dist -= float(yoff)*0.2f;
+    if(g_dist < 0.1f) g_dist = 0.1f;
+}
+
 // -----------------------------------------------------------------------------
 // Main
 // -----------------------------------------------------------------------------
-int main() {
-    // 1. Init GLFW
+int main()
+{
+    // 1) Init GLFW
     if(!glfwInit()) {
         std::cerr << "GLFW init failed\n";
         return -1;
@@ -146,7 +195,7 @@ int main() {
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR,3);
     glfwWindowHint(GLFW_OPENGL_PROFILE,GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(g_width, g_height, "Sphere", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(g_width, g_height, "Random Sphere w/Radius Colors", nullptr, nullptr);
     if(!window) {
         std::cerr << "Window creation failed\n";
         glfwTerminate();
@@ -154,102 +203,98 @@ int main() {
     }
     glfwMakeContextCurrent(window);
 
-    // Callbacks
-    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
+    glfwSetFramebufferSizeCallback(window, framebufferCB);
     glfwSetMouseButtonCallback(window, mouseButtonCB);
     glfwSetCursorPosCallback(window, cursorPosCB);
+    glfwSetScrollCallback(window, scrollCB);
 
-    // 2. Init GLEW
+    // 2) Init GLEW
     if( glewInit() != GLEW_OK ) {
         std::cerr << "GLEW init failed\n";
         return -1;
     }
 
-    // 3. Build VBO
-    int numLat=64, numLon=128;
-    int numPoints = numLat * numLon;
-    size_t bufferSize = size_t(numPoints)*3*sizeof(float);
+    // 3) Create VBO + VAO
+    int numPoints  = 50000;               // # of points
+    size_t floatsPerVertex = 4;           // (x, y, z, radius)
+    size_t floatCount      = floatsPerVertex * numPoints;
+    size_t bufferSize      = floatCount*sizeof(float);
 
     GLuint vbo;
     glGenBuffers(1, &vbo);
 
-    // 4. Create VAO (REQUIRED in core profile!)
     GLuint vao;
     glGenVertexArrays(1, &vao);
-    glBindVertexArray(vao);
+    glBindVertexArray(vao); // bind the VAO
 
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, bufferSize, nullptr, GL_DYNAMIC_DRAW);
 
-    // 5. Register with CUDA
+    // 4) Register with CUDA
     cudaGraphicsResource* cudaRes;
     cudaGraphicsGLRegisterBuffer(&cudaRes, vbo, cudaGraphicsMapFlagsWriteDiscard);
 
-    // 6. Use CUDA to fill buffer
+    // 5) Generate random data with CURAND, then finalize in kernel
     {
+        curandGenerator_t gen;
+        curandCreateGenerator(&gen, CURAND_RNG_PSEUDO_DEFAULT);
+        curandSetPseudoRandomGeneratorSeed(gen, 12345ULL);
+
+        // Map
         cudaGraphicsMapResources(1, &cudaRes, 0);
         float* dPtr = nullptr;
-        size_t sz   = 0;
-        cudaGraphicsResourceGetMappedPointer((void**)&dPtr, &sz, cudaRes);
+        size_t dSize = 0;
+        cudaGraphicsResourceGetMappedPointer((void**)&dPtr, &dSize, cudaRes);
 
+        // curandGenerateNormal needs an even number of floats
+        size_t alignedCount = (floatCount + 1) & ~1; // round up
+        curandGenerateNormal(gen, dPtr, alignedCount, 0.0f, 1.0f);
+
+        // Kernel: finalize points => direction + radius
         int blockSize=256;
         int gridSize =(numPoints + blockSize-1)/blockSize;
-        generateSphere<<<gridSize, blockSize>>>(dPtr, numLat, numLon, 1.f);
+        finalizePoints<<<gridSize, blockSize>>>(dPtr, numPoints);
         cudaDeviceSynchronize();
 
         cudaGraphicsUnmapResources(1, &cudaRes, 0);
+        curandDestroyGenerator(gen);
     }
 
-    // 7. Setup Vertex Attribute
+    // 6) Setup vertex attribute => (location=0) has 4 floats
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3*sizeof(float), (void*)0);
+    glVertexAttribPointer(0, 4, GL_FLOAT, GL_FALSE, 4*sizeof(float), (void*)0);
 
-    // (Unbind VAO to be safe)
     glBindVertexArray(0);
 
-    // 8. Create/Use Shader
+    // 7) Create shader + enable program point size
     GLuint prog = createShaderProgram(vsSource, fsSource);
     glUseProgram(prog);
-
-    // Uniform location
     GLint mvpLoc = glGetUniformLocation(prog, "u_mvp");
 
-    // 9. Optional: enable "programmable point size"
     glEnable(GL_PROGRAM_POINT_SIZE);
-
-    // Depth test
     glEnable(GL_DEPTH_TEST);
 
-    // Check errors up to this point
+    // Main loop
+    while(!glfwWindowShouldClose(window))
     {
-        GLenum err;
-        while((err=glGetError())!=GL_NO_ERROR) {
-            std::cerr<<"OpenGL init error: "<<err<<"\n";
-        }
-    }
-
-    // 10. Main Loop
-    while(!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
         glClearColor(0.1f,0.15f,0.2f,1.f);
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        // Build MVP with GLM
+        // Build MVP using GLM
         float aspect = float(g_width)/float(g_height);
-        auto proj  = glm::perspective(glm::radians(45.f), aspect, 0.1f, 100.f);
-        auto view  = glm::translate(glm::mat4(1.f), glm::vec3(0, 0, -g_dist));
-        view       = glm::rotate(view, glm::radians(g_pitch), glm::vec3(1,0,0));
-        view       = glm::rotate(view, glm::radians(g_yaw),   glm::vec3(0,1,0));
-        auto model = glm::mat4(1.f);
+        glm::mat4 proj  = glm::perspective(glm::radians(45.f), aspect, 0.1f, 100.f);
+        glm::mat4 view  = glm::translate(glm::mat4(1.f), glm::vec3(0, 0, -g_dist));
+        view            = glm::rotate(view, glm::radians(g_pitch), glm::vec3(1,0,0));
+        view            = glm::rotate(view, glm::radians(g_yaw),   glm::vec3(0,1,0));
+        glm::mat4 model = glm::mat4(1.f);
 
-        glm::mat4 mvp = proj * view * model;
+        glm::mat4 mvp   = proj * view * model;
 
-        // Use shader
         glUseProgram(prog);
         glUniformMatrix4fv(mvpLoc, 1, GL_FALSE, glm::value_ptr(mvp));
 
-        // Draw
         glBindVertexArray(vao);
         glDrawArrays(GL_POINTS, 0, numPoints);
         glBindVertexArray(0);
