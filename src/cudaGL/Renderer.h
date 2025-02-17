@@ -25,6 +25,8 @@ public:
     Renderer();
     ~Renderer();
 
+    void cleanup();
+
     void render();
 };
 

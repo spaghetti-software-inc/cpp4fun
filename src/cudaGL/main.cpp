@@ -56,13 +56,6 @@ Renderer::Renderer() {
 }
 
 Renderer::~Renderer() {
-    // unregister this buffer object with CUDA
-    checkCudaErrors(cudaGraphicsUnregisterResource(_cuda_vbo_resource));
-
-    glBindBuffer(1, _vbo);
-    glDeleteBuffers(1, &_vbo);
-
-    _vbo = 0;
 }
 
 void Renderer::render() {
@@ -70,10 +63,22 @@ void Renderer::render() {
   glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 }
 
+void Renderer::cleanup() {
+  // unregister this buffer object with CUDA
+  checkCudaErrors(cudaGraphicsUnregisterResource(_cuda_vbo_resource));
 
+  glBindBuffer(1, _vbo);
+  glDeleteBuffers(1, &_vbo);
+
+  _vbo = 0;
+}
 
 
 std::unique_ptr<Renderer> renderer = nullptr;
+
+void cleanup() {
+  renderer->cleanup();
+}
 
 
 
@@ -135,10 +140,16 @@ void initGL(int *argc, char **argv) {
     }
   
   #endif
-  
+
     glEnable(GL_DEPTH_TEST);
   
-  
+    std::cout << "" << std::endl;
+    std::cout << "" << "OpenGL Vendor: " << glGetString(GL_VENDOR) << std::endl;
+    std::cout << "" << "OpenGL Renderer: " << glGetString(GL_RENDERER) << std::endl;
+    std::cout << "" << "OpenGL Version: " << glGetString(GL_VERSION) << std::endl;
+    std::cout << "" << "OpenGL Shading Language Version: " << glGetString(GL_SHADING_LANGUAGE_VERSION) << std::endl;
+    std::cout << "" << std::endl;
+
     glutReportErrors();
   }
 
@@ -152,6 +163,7 @@ int main(int argc, char **argv) {
     // This is needed to achieve optimal performance with OpenGL/CUDA interop.
     initGL(&argc, argv);
   
+
     
     // findCudaDevice(argc, (const char **)argv);
   
@@ -168,6 +180,11 @@ int main(int argc, char **argv) {
     //   glutKeyboardUpFunc(keyUp);
     //   glutSpecialFunc(special);
     //   glutIdleFunc(idle);
+#if defined (__APPLE__) || defined(MACOSX)
+        atexit(cleanup);
+#else
+        glutCloseFunc(cleanup);
+#endif
   
     renderer = std::make_unique<Renderer>();
     glutMainLoop();
