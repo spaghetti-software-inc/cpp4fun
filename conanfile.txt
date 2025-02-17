@@ -1,7 +1,15 @@
 [requires]
 glew/2.2.0
 glfw/3.4
+glm/1.0.1
+imgui/1.91.5
 
 [generators]
 CMakeDeps
 CMakeToolchain
+
+[imports]
+./misc/bindings, imgui_impl_glfw.cpp -> ../bindings
+./misc/bindings, imgui_impl_opengl2.cpp -> ../bindings
+./misc/bindings, imgui_impl_glfw.h -> ../bindings
+./misc/bindings, imgui_impl_opengl2.h -> ../bindings

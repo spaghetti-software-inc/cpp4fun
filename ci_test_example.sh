@@ -17,6 +17,7 @@ cp -r ../data ./
 
 #./tests/tests
 ./src/cpp4fun/cpp4fun
+#./src/cpp4fun/imguiDemo
 #./src/particles/particles
 #./src/cudaGL/cudaGL
 

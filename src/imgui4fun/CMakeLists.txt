@@ -1,4 +1,4 @@
-project(cpp4fun CXX CUDA)
+project(imgui4fun CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -8,6 +8,8 @@ find_package(GLEW REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(glfw3 REQUIRED)
 find_package(glm REQUIRED)
+
+find_package(imgui REQUIRED)
 
 find_package(CUDA REQUIRED)
 
@@ -25,7 +27,7 @@ include_directories(
 
 # Source files
 set(SOURCE_FILES
-    main.cu
+    main.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
@@ -36,8 +38,7 @@ target_link_libraries(${PROJECT_NAME}
     glfw
     GLEW::GLEW
     glm::glm
-    curand
+    imgui::imgui
 )
 
 
-set_target_properties(${PROJECT_NAME} PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
