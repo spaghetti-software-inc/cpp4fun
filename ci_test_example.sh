@@ -16,8 +16,8 @@ cmake --build . -j20
 cp -r ../data ./
 
 #./tests/tests
-#./src/cpp4fun/cpp4fun
+./src/cpp4fun/cpp4fun
 #./src/particles/particles
-./src/cudaGL/cudaGL
+#./src/cudaGL/cudaGL
 
 
