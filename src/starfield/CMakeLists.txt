@@ -1,36 +1,43 @@
-project(cudaGL CXX CUDA)
+project(starfield CXX CUDA)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
-# Find OpenGL and GLUT
+
+
+find_package(GLEW REQUIRED)
 find_package(OpenGL REQUIRED)
-find_package(GLUT REQUIRED)
+find_package(glfw3 REQUIRED)
+find_package(glm REQUIRED)
+
 find_package(CUDA REQUIRED)
 
+
 include_directories(
-    ${CMAKE_CURRENT_SOURCE_DIR}/Common
-    ${CMAKE_CURRENT_SOURCE_DIR}/Common/GL
-    ${CMAKE_CURRENT_SOURCE_DIR}/Common/UtilNPP
     ${OPENGL_INCLUDE_DIR}
-    ${GLUT_INCLUDE_DIR}
     ${CUDA_INCLUDE_DIRS}
+    ${GLFW_INCLUDE_DIRS}
 )
+
+
+# Recursively find all .cpp files in the tests directory and subdirectories
+#file(GLOB_RECURSE EXE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
+
 
 # Source files
 set(SOURCE_FILES
-    GLSLProgram.cpp
     main.cu
 )
 
-
-# Add the executable
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 
-# Link CUDA library to the executable
 target_link_libraries(${PROJECT_NAME}
-    ${OPENGL_LIBRARIES}
-    ${GLUT_LIBRARIES}
+    ${OPENGL_LIBRARIES}    
     ${CUDA_LIBRARIES}
+    glfw
+    GLEW::GLEW
+    glm::glm
+    curand
 )
+
 
 set_target_properties(${PROJECT_NAME} PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
