@@ -18,6 +18,7 @@ include_directories(
 
 # Source files
 set(SOURCE_FILES
+    GLSLProgram.cpp
     main.cu
 )
 

@@ -1,4 +1,3 @@
-
 #include <helper_gl.h>
 #if defined(__APPLE__) || defined(__MACOSX)
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
@@ -29,6 +28,7 @@
 #include <memory>
 #include <vector>
 
+#include "GLSLProgram.h"
 
 class Renderer {
   private:
@@ -39,9 +39,14 @@ class Renderer {
       GLuint _vbo;
       struct cudaGraphicsResource* _cuda_vbo_resource = nullptr;
       void* _d_vbo_buffer = nullptr;
+
+
+      GLuint _floor_tex = 0;
+      std::unique_ptr<GLSLProgram> _floor_prog = nullptr;
   
       GLuint createTexture(GLenum target, GLint internalformat, GLenum format, int w, int h, void *data);
-
+      GLuint loadTexture(const std::string& filename);
+      
   
   public:
       Renderer();
@@ -51,7 +56,6 @@ class Renderer {
   
       void render();
 
-      GLuint loadTexture(char *filename);
       
       
 
@@ -78,6 +82,9 @@ Renderer::Renderer() {
   checkCudaErrors(cudaGraphicsGLRegisterBuffer(&_cuda_vbo_resource, _vbo, cudaGraphicsMapFlagsWriteDiscard));
 
   // SDK_CHECK_ERROR_GL();    
+
+  // load textures
+  _floor_tex = loadTexture("data/floortile.ppm");
 }
 
 Renderer::~Renderer() {
@@ -94,8 +101,10 @@ void Renderer::cleanup() {
 
   glBindBuffer(1, _vbo);
   glDeleteBuffers(1, &_vbo);
-
   _vbo = 0;
+
+  glDeleteTextures(1, &_floor_tex);
+  _floor_tex = 0;
 }
 
 GLuint Renderer::createTexture(GLenum target, GLint internalformat, GLenum format, 
@@ -114,17 +123,17 @@ GLuint Renderer::createTexture(GLenum target, GLint internalformat, GLenum forma
   return tex;
 }
 
-GLuint Renderer::loadTexture(char *filename) {
+GLuint Renderer::loadTexture(const std::string& filename) {
   unsigned char *data = 0;
   unsigned int width, height;
-  sdkLoadPPM4ub(filename, &data, &width, &height);
+  sdkLoadPPM4ub(filename.c_str(), &data, &width, &height);
 
   if (!data) {
-    printf("Error opening file '%s'\n", filename);
+    printf("Error opening file '%s'\n", filename.c_str());
     return 0;
   }
 
-  printf("Loaded '%s', %d x %d pixels\n", filename, width, height);
+  printf("Loaded '%s', %d x %d pixels\n", filename.c_str(), width, height);
 
   return createTexture(GL_TEXTURE_2D, GL_RGBA8, GL_RGBA, width, height, data);
 }
@@ -204,6 +213,12 @@ void initGL(int *argc, char **argv) {
     std::cout << "" << "OpenGL Version: " << glGetString(GL_VERSION) << std::endl;
     std::cout << "" << "OpenGL Shading Language Version: " << glGetString(GL_SHADING_LANGUAGE_VERSION) << std::endl;
     std::cout << "" << std::endl;
+
+    
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER,
+                    GL_LINEAR_MIPMAP_LINEAR);
+    glTexParameterf(GL_TEXTURE_2D, GL_TEXTURE_MAX_ANISOTROPY_EXT, 16.0f);
+  
 
     glutReportErrors();
   }
