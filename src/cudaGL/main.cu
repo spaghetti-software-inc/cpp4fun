@@ -22,8 +22,7 @@
 // CUDA helper functions
 #include <helper_cuda.h>         // helper functions for CUDA error check
 
-#include "Renderer.h"
-
+#include <helper_image.h>
 
 
 #include <iostream>
@@ -31,7 +30,33 @@
 #include <vector>
 
 
-#include "Renderer.h"
+class Renderer {
+  private:
+      const unsigned int _mesh_width    = 256;
+      const unsigned int _mesh_height   = 256;
+  
+      // vbo variables
+      GLuint _vbo;
+      struct cudaGraphicsResource* _cuda_vbo_resource = nullptr;
+      void* _d_vbo_buffer = nullptr;
+  
+      GLuint createTexture(GLenum target, GLint internalformat, GLenum format, int w, int h, void *data);
+
+  
+  public:
+      Renderer();
+      ~Renderer();
+  
+      void cleanup();
+  
+      void render();
+
+      GLuint loadTexture(char *filename);
+      
+      
+
+  };
+  
 
 
 Renderer::Renderer() {
@@ -73,6 +98,36 @@ void Renderer::cleanup() {
   _vbo = 0;
 }
 
+GLuint Renderer::createTexture(GLenum target, GLint internalformat, GLenum format, 
+                     int w, int h, void *data) {
+  GLuint tex;
+  glGenTextures(1, &tex);
+  glBindTexture(target, tex);
+  glTexParameteri(target, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glTexParameteri(target, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(target, GL_TEXTURE_WRAP_S, GL_REPEAT);
+  glTexParameteri(target, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  glTexParameteri(target, GL_GENERATE_MIPMAP_SGIS, GL_TRUE);
+  glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+  glTexImage2D(target, 0, internalformat, w, h, 0, format, GL_UNSIGNED_BYTE,
+  data);
+  return tex;
+}
+
+GLuint Renderer::loadTexture(char *filename) {
+  unsigned char *data = 0;
+  unsigned int width, height;
+  sdkLoadPPM4ub(filename, &data, &width, &height);
+
+  if (!data) {
+    printf("Error opening file '%s'\n", filename);
+    return 0;
+  }
+
+  printf("Loaded '%s', %d x %d pixels\n", filename, width, height);
+
+  return createTexture(GL_TEXTURE_2D, GL_RGBA8, GL_RGBA, width, height, data);
+}
 
 std::unique_ptr<Renderer> renderer = nullptr;
 
