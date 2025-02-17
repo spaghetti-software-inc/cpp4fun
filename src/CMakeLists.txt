@@ -1,5 +1,6 @@
 add_subdirectory(cpp4fun)
 add_subdirectory(curand4fun)
+add_subdirectory(curand3d)
 
 add_subdirectory(imgui4fun)
 
