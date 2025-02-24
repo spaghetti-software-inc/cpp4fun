@@ -22,12 +22,12 @@ static int   g_height = 600;
 static float g_centerX = 0.0f;
 static float g_centerY = 0.0f;
 static float g_scale   = 1.0f;
-
 static bool  g_lmb=false, g_rmb=false;
 static double g_lastX=0.0, g_lastY=0.0;
+static float g_angleZ  = 0.0f;
 
-// Optional rotation around Z (like rotating the plane). 
-static float g_angleZ = 0.0f;
+// Which function are we currently plotting?
+static int   g_functionID = 1;  // 1-based index for convenience
 
 // -----------------------------------------------------------------------------
 // Simple vertex/fragment shader to draw a fullscreen quad with the PBO as a texture
@@ -99,11 +99,6 @@ GLuint createShaderProgram(const char* vtx, const char* frg)
 
 // -----------------------------------------------------------------------------
 // CUDA kernel for domain coloring
-// For each pixel (px, py):
-//   1) Map to complex z in plane
-//   2) Compute f(z) = z (or any other function you like)
-//   3) Convert to color (H = arg, V = some function of magnitude, etc.)
-//   4) Overdraw lines if near radial or angular grid
 // -----------------------------------------------------------------------------
 
 // Convert HSV to RGB
@@ -138,13 +133,107 @@ __device__ uchar4 hsv2rgb(float h, float s, float v)
     return c;
 }
 
-// Domain coloring kernel
+// Evaluate f(z).  We'll pick from multiple interesting examples.
+__device__ void computeFunction(int funcID, float zr, float zi, float &wr, float &wi)
+{
+    switch(funcID)
+    {
+    default:
+    case 1: // f(z) = z
+        wr = zr;
+        wi = zi;
+        break;
+    case 2: // f(z) = z^2
+        // (x+iy)^2 = (x^2 - y^2) + i(2xy)
+        wr = zr*zr - zi*zi;
+        wi = 2.f*zr*zi;
+        break;
+    case 3: // f(z) = 1/z (with check for zero)
+        {
+            float denom = zr*zr + zi*zi;
+            if(denom<1e-14f){
+                wr = 999999.f; // blow up
+                wi = 999999.f;
+            } else {
+                wr =  zr/denom;
+                wi = -zi/denom;
+            }
+        }
+        break;
+    case 4: // f(z) = e^z = e^(x+iy) = e^x * (cos y + i sin y)
+        {
+            float ex = expf(zr);
+            float cy = cosf(zi);
+            float sy = sinf(zi);
+            wr = ex * cy;
+            wi = ex * sy;
+        }
+        break;
+    case 5: // f(z) = sin(z) = sin(x)cosh(y) + i cos(x)sinh(y)
+        {
+            float sx = sinf(zr);
+            float cx = cosf(zr);
+            float cHy= coshf(zi);
+            float sHy= sinhf(zi);
+            wr = sx*cHy;
+            wi = cx*sHy;
+        }
+        break;
+    case 6: // f(z) = cos(z)
+        {
+            float c  = cosf(zr)*coshf(zi);
+            float ci = -sinf(zr)*sinhf(zi);
+            wr = c;
+            wi = ci;
+        }
+        break;
+    case 7: // f(z) = log(z)
+        // log(r e^{i\theta}) = ln(r) + i\theta
+        {
+            float r = sqrtf(zr*zr + zi*zi);
+            float theta = atan2f(zi, zr);
+            wr = logf(r);
+            wi = theta;
+        }
+        break;
+    case 8: // f(z) = z^3
+        {
+            // (x+iy)^3 = (x^3 - 3xy^2) + i(3x^2y - y^3)
+            float x2 = zr*zr;
+            float y2 = zi*zi;
+            wr = zr*(x2 - 3*y2);
+            wi = zi*(3*x2 - y2);
+        }
+        break;
+    case 9: // f(z) = tan(z)
+        // tan(z) = sin(2x)/(cos(2x)+cosh(2y)) + i*sinh(2y)/(cos(2x)+cosh(2y))
+        {
+            float twoX = 2.f*zr;
+            float twoY = 2.f*zi;
+            float sin2x = sinf(twoX);
+            float cos2x = cosf(twoX);
+            float sinh2y= sinhf(twoY);
+            float cosh2y= coshf(twoY);
+            float denom = cos2x + cosh2y;
+            if(fabsf(denom)<1e-14f){
+                wr = 999999.f; // blow up
+                wi = 999999.f;
+            } else {
+                wr = sin2x/denom;
+                wi = sinh2y/denom;
+            }
+        }
+        break;
+    }
+}
+
 __global__ void domainColorKernel(
     uchar4* outPixels, // 4-byte RGBA for each pixel
     int width, int height,
     float centerX, float centerY, 
     float scale,
-    float angleZ
+    float angleZ,
+    int   functionID
 )
 {
     int px = blockIdx.x * blockDim.x + threadIdx.x;
@@ -154,59 +243,45 @@ __global__ void domainColorKernel(
     // Map pixel to [-1..1], then to the complex plane
     float u = (px + 0.5f) / width  * 2.0f - 1.0f;
     float v = (py + 0.5f) / height * 2.0f - 1.0f;
-    // That gives u,v in [-1,1]; now scale to aspect ratio
     float aspect = (float)width / (float)height;
     u *= aspect;
 
-    // (u, v) is the normalized coordinate for the "view".
     // Rotate by angleZ if desired:
     float ca = cosf(angleZ);
     float sa = sinf(angleZ);
     float rx =  u*ca - v*sa;
     float ry =  u*sa + v*ca;
 
-    // Then scale + translate => complex z
+    // Then scale + translate => domain z
     float z_real = rx/scale + centerX;
     float z_imag = ry/scale + centerY;
 
-    // f(z) = z  =>  w_real=z_real, w_imag=z_imag
-    float w_real = z_real;
-    float w_imag = z_imag;
+    // Evaluate f(z)
+    float w_real, w_imag;
+    computeFunction(functionID, z_real, z_imag, w_real, w_imag);
 
-    // Compute magnitude + angle
+    // magnitude + angle
     float mag = sqrtf(w_real*w_real + w_imag*w_imag);
     float arg = atan2f(w_imag, w_real); // in [-pi, pi]
 
     // Convert angle to hue in [0..1]
-    float hue = (arg + M_PI)/(2.0f*M_PI); // shift + normalize
+    float hue = (arg + M_PI)/(2.0f*M_PI); 
     float saturation = 1.0f;
-    // Let's pick brightness from the logistic function so we see differences near 0
+    // brightness from logistic function so we see detail near 0
     float brightness = 1.0f - 1.0f/(1.0f + mag*0.5f);
 
-    // Optionally overlay grid lines:
-    // - radial lines if mag is near an integer
-    // - angular lines if arg is near multiples of pi/6
+    // optional grid lines
     float lineFactor = 1.0f; 
-    // radial: distance from integer radius
     float radialDist = fabsf(mag - roundf(mag));
-    if(radialDist < 0.01f) {
-        // darken color slightly
-        lineFactor *= 0.5f; 
-    }
-
-    // angular: let's define multiples of pi/6 => arg in [-pi, pi]
+    if(radialDist < 0.01f) { lineFactor *= 0.5f; }
     float mul = arg/(M_PI/6.0f); 
     float frac = fabsf(mul - roundf(mul));
-    if(frac < 0.005f) {
-        lineFactor *= 0.4f;
-    }
+    if(frac < 0.005f) { lineFactor *= 0.4f; }
 
     brightness *= lineFactor;
 
     // Convert to RGB
     uchar4 color = hsv2rgb(hue, saturation, brightness);
-
-    // Store
     outPixels[py*width + px] = color;
 }
 
@@ -251,8 +326,7 @@ void cursorPosCB(GLFWwindow* w, double x, double y)
     }
     // Right drag => pan
     if(g_rmb) {
-        // pan in screen coords => shift center
-        float factor = 1.0f/g_scale * 0.002f; 
+        float factor = 1.0f/g_scale * 0.002f;
         g_centerX -= (float)dx * factor*( (float)g_width/(float)g_height );
         g_centerY += (float)dy * factor;
     }
@@ -261,12 +335,22 @@ void cursorPosCB(GLFWwindow* w, double x, double y)
 void scrollCB(GLFWwindow* w, double xoff, double yoff)
 {
     // Zoom in/out
-    // if yoff>0 => zoom in
-    // if yoff<0 => zoom out
     float zoomFactor = powf(1.1f, (float)yoff);
     g_scale *= zoomFactor;
-    if(g_scale < 0.00001f) g_scale = 0.00001f;
-    if(g_scale > 100000.0f) g_scale = 100000.0f;
+    if(g_scale < 1e-6f)  g_scale = 1e-6f;
+    if(g_scale > 1e6f)   g_scale = 1e6f;
+}
+
+// Keyboard callback to switch functions
+void keyCB(GLFWwindow* w, int key, int scancode, int action, int mods)
+{
+    if(action == GLFW_PRESS) {
+        // If the user presses digits 1..9, set g_functionID
+        if(key >= GLFW_KEY_1 && key <= GLFW_KEY_9) {
+            g_functionID = key - GLFW_KEY_0; // e.g. '1' => 1, '2' => 2, ...
+            std::cout << "Switched to function ID: " << g_functionID << std::endl;
+        }
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -283,7 +367,7 @@ int main()
     glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR,3);
     glfwWindowHint(GLFW_OPENGL_PROFILE,GLFW_OPENGL_CORE_PROFILE);
 
-    GLFWwindow* window = glfwCreateWindow(g_width, g_height, "Domain Coloring f(z)=z", nullptr, nullptr);
+    GLFWwindow* window = glfwCreateWindow(g_width, g_height, "Imaginary Numbers", nullptr, nullptr);
     if(!window) {
         std::cerr << "Window creation failed\n";
         glfwTerminate();
@@ -295,6 +379,7 @@ int main()
     glfwSetMouseButtonCallback(window, mouseButtonCB);
     glfwSetCursorPosCallback(window, cursorPosCB);
     glfwSetScrollCallback(window, scrollCB);
+    glfwSetKeyCallback(window, keyCB);
 
     // 2) Init GLEW
     glewExperimental = GL_TRUE;
@@ -364,7 +449,8 @@ int main()
                   (g_height+block.y-1)/block.y);
         domainColorKernel<<<grid, block>>>(dPtr, g_width, g_height,
                                            g_centerX, g_centerY,
-                                           g_scale, g_angleZ);
+                                           g_scale, g_angleZ,
+                                           g_functionID);
         cudaDeviceSynchronize();
         cudaGraphicsUnmapResources(1, &g_cudaPbo, 0);
 
@@ -384,7 +470,7 @@ int main()
 
         glActiveTexture(GL_TEXTURE0);
         glBindTexture(GL_TEXTURE_2D, g_texture);
-        // If needed: glUniform1i(glGetUniformLocation(prog,"uTex"),0);
+        // glUniform1i(glGetUniformLocation(prog,"uTex"),0); // if needed
 
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
         glBindVertexArray(0);
