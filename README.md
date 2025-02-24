@@ -8,9 +8,13 @@ experiments in visual art using NVIDIA CUDA, OpenGL,and C++.
 run ci_test_example.sh
 
 
-https://github.com/user-attachments/assets/b8978b1e-7084-4c6b-890c-869d4ece876f
+
+https://github.com/user-attachments/assets/d56b566a-d7a3-4def-a91e-91e18c896507
+
+
 
 
 https://github.com/user-attachments/assets/c727d21d-38a9-4452-9eb5-1e2ef34b3ed3
 
+https://github.com/user-attachments/assets/b8978b1e-7084-4c6b-890c-869d4ece876f
 
