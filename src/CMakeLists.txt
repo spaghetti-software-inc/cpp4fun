@@ -1,3 +1,4 @@
+add_subdirectory(pde)
 add_subdirectory(complex)
 add_subdirectory(cpp4fun)
 add_subdirectory(curand4fun)
