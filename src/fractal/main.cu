@@ -27,7 +27,7 @@ static bool   g_rmb   = false;
 static double g_lastX = 0.0;
 static double g_lastY = 0.0;
 
-// Which fractal are we showing? (1=Mandelbrot, 2=Julia, 3=Burning Ship, etc.)
+// Which fractal are we showing? (1=Mandelbrot, 2=Julia, 3=Burning Ship, 4=Tricorn, 5=Celtic, 6=Newton)
 static int    g_fractalID = 1;
 
 // We'll pick a default Julia parameter:
@@ -61,25 +61,49 @@ void main()
 )";
 
 // -----------------------------------------------------------------------------
-// Simple GPU color mapping for iteration counts
+// Convert an HSV color to RGBA. We'll do a full 0..1 hue range for iteration.
+// -----------------------------------------------------------------------------
+__device__ uchar4 hsvToRGBA(float h, float s, float v)
+{
+    // h in [0, 1], s in [0, 1], v in [0, 1]
+    float H = h * 360.0f; // Hue in degrees
+    float C = v * s;
+    float X = C * (1.0f - fabsf(fmodf(H / 60.0f, 2.0f) - 1.0f));
+    float m = v - C;
+
+    float r, g, b;
+    if      (H < 60)  { r = C; g = X; b = 0;   }
+    else if (H < 120) { r = X; g = C; b = 0;   }
+    else if (H < 180) { r = 0;   g = C; b = X; }
+    else if (H < 240) { r = 0;   g = X; b = C; }
+    else if (H < 300) { r = X; g = 0;   b = C; }
+    else              { r = C; g = 0;   b = X; }
+    
+    r += m; g += m; b += m;
+    r = fminf(fmaxf(r, 0.0f), 1.0f);
+    g = fminf(fmaxf(g, 0.0f), 1.0f);
+    b = fminf(fmaxf(b, 0.0f), 1.0f);
+
+    return make_uchar4(
+        static_cast<unsigned char>(r * 255.0f),
+        static_cast<unsigned char>(g * 255.0f),
+        static_cast<unsigned char>(b * 255.0f),
+        255
+    );
+}
+
+// -----------------------------------------------------------------------------
+// GPU color mapping for iteration counts: Full HSV rainbow
 // -----------------------------------------------------------------------------
 __device__ uchar4 iterationToColor(int iter, int maxIter)
 {
-    if(iter >= maxIter) {
+    if (iter >= maxIter) {
         // Inside fractal => black
-        return make_uchar4(0,0,0,255);
+        return make_uchar4(0, 0, 0, 255);
     } else {
-        // Let's do a sin-based palette
-        float t = float(iter)/float(maxIter);
-        float r = 0.5f + 0.5f*cosf(6.2831853f * t);
-        float g = 0.5f + 0.5f*cosf(6.2831853f * (t + 0.3333f));
-        float b = 0.5f + 0.5f*cosf(6.2831853f * (t + 0.6667f));
-        return make_uchar4(
-            (unsigned char)(__saturatef(r)*255),
-            (unsigned char)(__saturatef(g)*255),
-            (unsigned char)(__saturatef(b)*255),
-            255
-        );
+        // Map iteration [0..maxIter-1] into [0..1] for a full HSV rainbow
+        float t = float(iter) / float(maxIter - 1);
+        return hsvToRGBA(t, 1.0f, 1.0f); 
     }
 }
 
@@ -87,71 +111,155 @@ __device__ uchar4 iterationToColor(int iter, int maxIter)
 // Multi-fractal device function
 //   Returns the iteration count for (x,y), depending on fractalID
 // -----------------------------------------------------------------------------
-__device__ int fractalCompute(double x, double y, int fractalID, double juliaCx, double juliaCy)
+__device__ int fractalCompute(double x, double y, int fractalID,
+                              double juliaCx, double juliaCy)
 {
     const int maxIter = 256;
 
-    if(fractalID == 1) {
-        // 1) Mandelbrot
-        double zx=0.0, zy=0.0;
-        int iter=0;
-        while(iter<maxIter) {
-            double zx2 = zx*zx - zy*zy;
-            double zy2 = 2.0*zx*zy;
-            zx = zx2 + x;
-            zy = zy2 + y;
-            if(zx*zx + zy*zy > 4.0) break;
+    // Some helper lambdas to keep code DRY:
+    auto magnitudeSqr = [](double a, double b) {
+        return a*a + b*b;
+    };
+
+    switch(fractalID)
+    {
+    case 1:
+    {
+        // Mandelbrot
+        double zx = 0.0, zy = 0.0;
+        int iter = 0;
+        while(iter < maxIter)
+        {
+            double zx2 = zx*zx - zy*zy + x;
+            double zy2 = 2.0*zx*zy + y;
+            zx = zx2; 
+            zy = zy2;
+            if (magnitudeSqr(zx, zy) > 4.0) break;
             iter++;
         }
         return iter;
     }
-    else if(fractalID == 2) {
-        // 2) Julia (z_{n+1} = z_n^2 + c)
-        // Here (x,y) is the initial z_0. c is (juliaCx, juliaCy).
+    case 2:
+    {
+        // Julia
         double zx = x;
         double zy = y;
-        int iter=0;
-        while(iter<maxIter) {
-            double zx2 = zx*zx - zy*zy;
-            double zy2 = 2.0*zx*zy;
-            zx = zx2 + juliaCx;
-            zy = zy2 + juliaCy;
-            if(zx*zx + zy*zy > 4.0) break;
+        int iter = 0;
+        while(iter < maxIter)
+        {
+            double zx2 = zx*zx - zy*zy + juliaCx;
+            double zy2 = 2.0*zx*zy + juliaCy;
+            zx = zx2; 
+            zy = zy2;
+            if (magnitudeSqr(zx, zy) > 4.0) break;
             iter++;
         }
         return iter;
     }
-    else if(fractalID == 3) {
-        // 3) Burning Ship
-        // z_{n+1} = (|Re(z_n)| + i|Im(z_n)|)^2 + c
-        // We'll do absolute-value before squaring.
-        double zx=0.0, zy=0.0;
-        int iter=0;
-        while(iter<maxIter) {
+    case 3:
+    {
+        // Burning Ship
+        double zx = 0.0, zy = 0.0;
+        int iter = 0;
+        while(iter < maxIter)
+        {
             double ax = fabs(zx);
             double ay = fabs(zy);
-            double zx2 = ax*ax - ay*ay;
-            double zy2 = 2.0*ax*ay;
-            zx = zx2 + x;
-            zy = zy2 + y;
-            if(zx*zx + zy*zy > 4.0) break;
+            double zx2 = ax*ax - ay*ay + x;
+            double zy2 = 2.0*ax*ay + y;
+            zx = zx2; 
+            zy = zy2;
+            if (magnitudeSqr(zx, zy) > 4.0) break;
             iter++;
         }
         return iter;
     }
-    else {
-        // default: treat as mandelbrot
-        double zx=0.0, zy=0.0;
-        int iter=0;
-        while(iter<maxIter) {
-            double zx2 = zx*zx - zy*zy;
-            double zy2 = 2.0*zx*zy;
+    case 4:
+    {
+        // Tricorn: z_{n+1} = conj(z_n)^2 + c
+        // conj(z) = (zx, -zy)
+        double zx = 0.0, zy = 0.0;
+        int iter = 0;
+        while(iter < maxIter)
+        {
+            double zx2 = zx*zx - ( -zy )*( -zy ); // x^2 - (-y)^2 = x^2 - y^2
+            double zy2 = 2.0*zx*(-zy);            // 2*x*(-y) = -2xy
             zx = zx2 + x;
             zy = zy2 + y;
-            if(zx*zx + zy*zy > 4.0) break;
+            if (magnitudeSqr(zx, zy) > 4.0) break;
             iter++;
         }
         return iter;
+    }
+    case 5:
+    {
+        // Celtic: z_{n+1} = (|x^2 - y^2| + 2xy i) + c
+        double zx = 0.0, zy = 0.0;
+        int iter = 0;
+        while(iter < maxIter)
+        {
+            double zx2 = fabs(zx*zx - zy*zy);
+            double zy2 = 2.0 * zx * zy;
+            zx = zx2 + x;
+            zy = zy2 + y;
+            if (magnitudeSqr(zx, zy) > 4.0) break;
+            iter++;
+        }
+        return iter;
+    }
+    case 6:
+    {
+        // Newton's method for f(z)=z^3-1
+        // z_{n+1} = z_n - f(z_n)/f'(z_n)
+        // We treat (x,y) as the initial guess in the complex plane
+        double zx = x, zy = y;
+        const double EPS = 1e-12;
+        for(int i = 0; i < maxIter; i++)
+        {
+            // f(z) = z^3 - 1
+            // f'(z) = 3z^2
+            // z^3 => (zx + i zy)^3
+            double rx = zx*zx - zy*zy;    // (x^2 - y^2)
+            double ry = 2.0*zx*zy;        // (2xy)
+            double fx = rx*zx - ry*zy - 1.0; // real part of z^3 - 1
+            double fy = rx*zy + ry*zx;    // imag part of z^3
+            // derivative 3z^2 => 3*(rx + i ry)
+            double dfx = 3.0*rx;
+            double dfy = 3.0*ry;
+            
+            // complex division: (fx + i fy) / (dfx + i dfy)
+            double denom = dfx*dfx + dfy*dfy + EPS;
+            double nx = (fx*dfx + fy*dfy) / denom;
+            double ny = (fy*dfx - fx*dfy) / denom;
+            
+            zx -= nx;  // new z = z - f(z)/f'(z)
+            zy -= ny;
+            
+            // If close to any root of unity, break
+            double mag = sqrt(magnitudeSqr(zx*zx - zy*zy, 2*zx*zy));
+            if(fabs(mag - 1.0) < 1e-3)
+            {
+                return i;
+            }
+        }
+        return maxIter - 1;
+    }
+    default:
+    {
+        // Fallback: treat as mandelbrot
+        double zx=0.0, zy=0.0;
+        int iter=0;
+        while(iter<maxIter)
+        {
+            double zx2 = zx*zx - zy*zy + x;
+            double zy2 = 2.0*zx*zy + y;
+            zx = zx2; 
+            zy = zy2;
+            if (magnitudeSqr(zx, zy) > 4.0) break;
+            iter++;
+        }
+        return iter;
+    }
     }
 }
 
@@ -193,11 +301,11 @@ void fractalKernel(uchar4* outColor, int width, int height,
 // -----------------------------------------------------------------------------
 // OpenGL + CUDA interop
 // -----------------------------------------------------------------------------
-static GLuint              g_pbo        = 0;
+static GLuint               g_pbo       = 0;
 static cudaGraphicsResource* g_pboCuda  = nullptr;
-static GLuint              g_tex        = 0;
-static GLuint              g_vao        = 0;
-static GLuint              g_prog       = 0;
+static GLuint               g_tex       = 0;
+static GLuint               g_vao       = 0;
+static GLuint               g_prog      = 0;
 
 // -----------------------------------------------------------------------------
 // Callbacks
@@ -255,7 +363,7 @@ static void cursorPosCB(GLFWwindow* w, double x, double y)
 static void scrollCB(GLFWwindow* w, double xoff, double yoff)
 {
     // zoom
-    double factor = pow(0.9, yoff); // or 1.1^( -yoff )
+    double factor = pow(0.9, yoff); 
     g_scale *= factor;
     if(g_scale<1e-15) g_scale=1e-15;
     if(g_scale>1e6)   g_scale=1e6;
