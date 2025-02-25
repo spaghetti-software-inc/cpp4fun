@@ -1,3 +1,5 @@
+
+add_subdirectory(fractal)
 add_subdirectory(rnd_complex)
 add_subdirectory(pde)
 add_subdirectory(complex)
