@@ -16,6 +16,7 @@ cmake --build . -j20
 cp -r ../data ./
 
 #./tests/tests
+./src/rnd_complex/rnd_complex
 ./src/pde/pde
 ./src/complex/complex
 ./src/starfield/starfield
