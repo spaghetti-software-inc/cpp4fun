@@ -1,4 +1,5 @@
 
+add_subdirectory(microscope)
 add_subdirectory(fractal)
 add_subdirectory(rnd_complex)
 add_subdirectory(pde)

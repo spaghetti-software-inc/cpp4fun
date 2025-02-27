@@ -15,8 +15,10 @@ cmake --build . -j20
 
 cp -r ../data ./
 
-#./tests/tests
-./src/fractal/fractal
+#./tests/tests0
+
+./src/microscope/microscope
+# ./src/fractal/fractal
 # ./src/rnd_complex/rnd_complex
 # ./src/pde/pde
 # ./src/complex/complex
