@@ -11,6 +11,111 @@
  *    - DoubleSlitApp:      Ties all subsystems together.
  *
  *  Build with nvcc, linking against OpenGL, GLFW, CUDA, and CURAND libraries.
+ * 
+ * 
+ *          +----------------------+
+            |       main()         |
+            | (Program Entry Point)|
+            +----------------------+
+                      |
+                      v
+            +----------------------+
+            |  DoubleSlitApp()     |
+            |  (Constructor)       |
+            +----------------------+
+                      |
+                      v
+     +-------------------------------------+
+     | Initialize Subsystems:              |
+     |   - GLFWWindow      (Window/Input)  |
+     |   - DoubleSlitSimulation (Physics)  |
+     |   - DoubleSlitRenderer   (OpenGL)   |
+     |   - CudaSimulator      (CUDA/CURAND)|
+     +-------------------------------------+
+                      |
+                      v
+     +--------------------------------------+
+     | Setup Resources:                     |
+     |   - OpenGL: GLEW, VBO, FBO, Shaders  |
+     |   - CUDA: Map VBO, Initialize CURAND |
+     |   - Clear Accumulation Buffer        |
+     +--------------------------------------+
+                      |
+                      v
+            +----------------------+
+            |     run() Loop       |
+            +----------------------+
+                      |
+                      v
+         +---------------------------------+
+         |   while(!window.shouldClose())  |
+         +---------------------------------+
+                      |
+                      v
+         +---------------------------------+
+         | Process Input Events (GLFW)     |
+         |   - Update window (poll events) |
+         |   - Handle pan, zoom, keys      |
+         +---------------------------------+
+                      |
+                      v
+         +---------------------------------+
+         | Check & Update:                 |
+         |   - Exit Request                |
+         |   - Clear Accumulation Request  |
+         |   - Window Resize / FBO Recreate|
+         |   - Pan/Zoom changes (clear FBO)|
+         +---------------------------------+
+                      |
+                      v
+         +---------------------------------------------+
+         | Compute Imax via                            |
+         | DoubleSlitSimulation.computeMaxIntensity()  |
+         +---------------------------------------------+
+                      |
+                      v
+         +---------------------------------+
+         | Generate Photons via            |
+         | CudaSimulator.generatePhotons() |
+         |  (CUDA Kernel: Monte Carlo      |
+         |   photon generation)            |
+         +---------------------------------+
+                      |
+                      v
+         +----------------------------------------+
+         | Render Photons to FBO via              |
+         | DoubleSlitRenderer.renderPointsToFBO() |
+         +----------------------------------------+
+                      |
+                      v
+         +------------------------------------------+
+         | Render FBO to Screen via                 |
+         | DoubleSlitRenderer.renderAccumToScreen() |
+         |   (Tone mapping & gamma correction)      |
+         +------------------------------------------+
+                      |
+                      v
+         +-------------------------------------+
+         | Render Text Overlay (stb_easy_font) |
+         |   - Display controls & params       |
+         +-------------------------------------+
+                      |
+                      v
+                [Next Frame]
+                      |
+                      v
+            +----------------------+
+            |   End of run() loop  |
+            +----------------------+
+                      |
+                      v
+            +----------------------+
+            |   Program Exit       |
+            +----------------------+
+
+ * 
+ * 
+ * 
  ******************************************************************************/
 
  #include <iostream>
