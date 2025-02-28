@@ -207,13 +207,23 @@
  }
  )";
  
+ // Modified Quad Fragment Shader with HDR tone mapping and gamma correction.
  constexpr std::string_view quadFragmentShaderSrc = R"(
  #version 120
  uniform sampler2D accumTex;
+ uniform float exposure;  // New uniform for HDR exposure control
  varying vec2 uv;
  void main(){
+     // Sample the accumulated high dynamic range color
      vec4 color = texture2D(accumTex, uv);
-     gl_FragColor = color;
+     
+     // Apply exponential tone mapping (HDR)
+     vec3 hdrColor = vec3(1.0) - exp(-color.rgb * exposure);
+     
+     // Gamma correction (assumes a gamma of 2.2)
+     vec3 gammaCorrected = pow(hdrColor, vec3(1.0/2.2));
+     
+     gl_FragColor = vec4(gammaCorrected, 1.0);
  }
  )";
  
@@ -282,6 +292,7 @@
        : windowWidth(800), windowHeight(600),
          panX(0.0f), panY(0.0f), zoom(1.0f), intensityBoost(1.0f),
          lastPanX(0.0f), lastPanY(0.0f), lastZoom(1.0f),
+         exposure(1.0f),  // Default exposure value for HDR
          params{}
      {
          createWindow();
@@ -318,6 +329,9 @@
      float lastPanX, lastPanY, lastZoom;
      bool mouseDragging = false;
      double lastMouseX = 0.0, lastMouseY = 0.0;
+     
+     // HDR exposure parameter
+     float exposure;
      
      // Simulation parameters
      SimulationParameters params;
@@ -460,7 +474,7 @@
      
      // Render the frame in two passes:
      //   1) Render points into the accumulation FBO using the point shader.
-     //   2) Draw a fullscreen quad sampling the accumulation texture.
+     //   2) Draw a fullscreen quad sampling the accumulation texture with HDR tone mapping.
      // Also overlay text using stb_easy_font.
      void renderFrame(float Imax) {
          // Pass 1: Render to accumulation FBO
@@ -494,13 +508,14 @@
          glDisable(GL_BLEND);
          glBindFramebuffer(GL_FRAMEBUFFER, 0);
          
-         // Pass 2: Render accumulation texture to screen via a fullscreen quad
+         // Pass 2: Render accumulation texture to screen via a fullscreen quad with HDR tone mapping and gamma correction
          glViewport(0, 0, windowWidth, windowHeight);
          glClear(GL_COLOR_BUFFER_BIT);
          glUseProgram(quadShaderProgram);
          glActiveTexture(GL_TEXTURE0);
          glBindTexture(GL_TEXTURE_2D, accumTex);
          glUniform1i(glGetUniformLocation(quadShaderProgram, "accumTex"), 0);
+         glUniform1f(glGetUniformLocation(quadShaderProgram, "exposure"), exposure);
          glBindVertexArray(quadVAO);
          glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
          glBindVertexArray(0);
@@ -529,10 +544,11 @@
              " ESC = Quit\n"
              "Params:\n"
              " Zoom: %.2f  IntBoost: %.2f\n"
+             " Exposure: %.2f\n"
              " lambda=%.3g m, dist=%.3g m, width=%.3g m, screenZ=%.3g m\n"
              " panX=%.4f, panY=%.4f",
-             zoom, intensityBoost, params.lambda, params.slitDist,
-             params.slitWidth, params.screenZ, panX, panY);
+             zoom, intensityBoost, exposure,
+             params.lambda, params.slitDist, params.slitWidth, params.screenZ, panX, panY);
          char buffer[99999];
          int num_quads = stb_easy_font_print(10, 10, info, nullptr, buffer, sizeof(buffer));
          glColor3f(1, 1, 1);
