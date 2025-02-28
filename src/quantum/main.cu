@@ -1,25 +1,33 @@
 /******************************************************************************
- *  DoubleSlitWithShaderPanZoom.cu
+ *  DoubleSlitWithShaderPanZoomIntensityOverlay.cu
  *
- *  A CUDA + OpenGL program demonstrating a double-slit interference pattern with
- *  physically meaningful colors (via a GLSL shader) and interactive pan/zoom.
+ *  A CUDA + OpenGL program demonstrating a double-slit interference pattern
+ *  with physically meaningful colors (via a GLSL shader), interactive pan/zoom,
+ *  adjustable intensity boost, and on-screen overlay instructions using
+ *  stb_easy_font.
  *
  *  Controls:
- *    - Arrow keys: Pan the view.
+ *    - Arrow keys or Mouse drag: Pan the view.
  *    - Mouse wheel: Zoom in/out.
- *    - Escape: Exit.
+ *    - I/K keys: Increase/Decrease intensity boost.
+ *    - ESC: Exit.
  *
  *  Each frame generates NUM_POINTS "photons" via rejection sampling.
  ******************************************************************************/
 
  #include <iostream>
  #include <cmath>
+ #include <cstdio>
  #include <GL/glew.h>
  #include <GLFW/glfw3.h>
  
  #include <cuda_runtime.h>
  #include <curand_kernel.h>
  #include <cuda_gl_interop.h>
+ 
+ // Include stb_easy_font for text overlay
+ #define STB_EASY_FONT_IMPLEMENTATION
+ #include "stb_easy_font.h"
  
  // ----------------------------------------------------------
  // Constants for the double-slit experiment (tweak as desired)
@@ -37,24 +45,30 @@
  static const int BLOCK_SIZE = 256;
  
  // ----------------------------------------------------------
- // Global variables for pan/zoom functionality
+ // Global variables for pan/zoom, intensity boost, and window size
  // ----------------------------------------------------------
  float panX = 0.0f;
  float panY = 0.0f;
- float zoom = 1.0f;  // A higher value zooms in (i.e. visible range shrinks)
+ float zoom = 1.0f;             // Higher zoom => closer view (smaller visible region)
+ float intensityBoost = 1.0f;   // Multiplier to brighten dark areas
+ 
+ int windowWidth = 800;
+ int windowHeight = 600;
+ 
+ // Variables for mouse dragging to pan
+ bool mouseDragging = false;
+ double lastMouseX = 0.0, lastMouseY = 0.0;
  
  // ----------------------------------------------------------
- // Simple double-slit intensity function (far-field approximation)
- // I(x) = I0 * [cos^2( (π·d·x)/(λ·z) )] * [sinc^2( (π·a·x)/(λ·z) )]
- // For simplicity: let I0 = 1.0 (we only need relative shape)
+ // Device functions: double-slit intensity calculation
  // ----------------------------------------------------------
  __device__ __inline__
  float sinc2f(float x)
  {
-     if(fabsf(x) < 1.0e-7f)
-         return 1.0f; // limit as x->0
+     if (fabsf(x) < 1.0e-7f)
+         return 1.0f;
      float val = sinf(x)/x;
-     return val*val;
+     return val * val;
  }
  
  __device__ __inline__
@@ -62,11 +76,11 @@
  {
      float alpha = M_PI * d * x / (wavelength * z);
      float beta  = M_PI * a * x / (wavelength * z);
-     return cosf(alpha)*cosf(alpha) * sinc2f(beta);
+     return cosf(alpha) * cosf(alpha) * sinc2f(beta);
  }
  
  // ----------------------------------------------------------
- // Device kernels for Monte Carlo photon generation
+ // CUDA Kernels for photon generation using rejection sampling
  // ----------------------------------------------------------
  __global__
  void setupCurandStates(curandState *states, unsigned long long seed, int n)
@@ -90,17 +104,17 @@
  )
  {
      int idx = blockIdx.x * blockDim.x + threadIdx.x;
-     if (idx >= n) return;
+     if (idx >= n)
+         return;
  
      curandState localState = states[idx];
- 
      float x, y, I;
      bool accepted = false;
-     for(int attempts=0; attempts < 1000 && !accepted; attempts++) {
+     for (int attempts = 0; attempts < 1000 && !accepted; attempts++) {
          x = -xRange + 2.0f * xRange * curand_uniform(&localState);
          I = doubleSlitIntensity(x, wavelength, slitDistance, slitWidth, screenZ);
          float testVal = curand_uniform(&localState);
-         if(testVal < (I / Imax))
+         if (testVal < (I / Imax))
              accepted = true;
      }
      y = -0.01f + 0.02f * curand_uniform(&localState);
@@ -109,7 +123,7 @@
  }
  
  // ----------------------------------------------------------
- // Shader source strings (GLSL version 120 for compatibility)
+ // GLSL Shader Sources (version 120 for compatibility)
  // ----------------------------------------------------------
  const char* vertexShaderSource = R"(
  #version 120
@@ -129,8 +143,8 @@
  uniform float slitWidth;
  uniform float screenZ;
  uniform float Imax;
-  
- // Compute sinc^2(x) safely
+ uniform float intensityBoost;  // Multiplier for computed intensity
+ 
  float sinc2(float x) {
      if (abs(x) < 1e-7)
          return 1.0;
@@ -138,14 +152,12 @@
      return s * s;
  }
   
- // Double-slit intensity function
  float doubleSlitIntensity(float x) {
      float alpha = 3.14159265359 * slitDistance * x / (wavelength * screenZ);
      float beta  = 3.14159265359 * slitWidth * x / (wavelength * screenZ);
      return cos(alpha)*cos(alpha) * sinc2(beta);
  }
   
- // Convert wavelength (in meters) to an approximate RGB value.
  vec3 wavelengthToRGB(float lambda) {
      float nm = lambda * 1e9; // convert to nanometers
      float R, G, B;
@@ -191,11 +203,9 @@
  }
   
  void main() {
-     // Compute the normalized intensity based on the x-position
      float intensity = doubleSlitIntensity(fragPos.x) / Imax;
-     // Get the base color corresponding to the light's wavelength
+     intensity = clamp(intensity * intensityBoost, 0.0, 1.0);
      vec3 baseColor = wavelengthToRGB(wavelength);
-     // Output the final color, modulated by the interference intensity
      gl_FragColor = vec4(baseColor * intensity, 1.0);
  }
  )";
@@ -225,11 +235,11 @@
  GLuint createShaderProgram() {
      GLuint vs = compileShader(GL_VERTEX_SHADER, vertexShaderSource);
      GLuint fs = compileShader(GL_FRAGMENT_SHADER, fragmentShaderSource);
-     if (!vs || !fs) return 0;
+     if (!vs || !fs)
+         return 0;
      GLuint program = glCreateProgram();
      glAttachShader(program, vs);
      glAttachShader(program, fs);
-     // Bind attribute location for our vertex positions
      glBindAttribLocation(program, 0, "vertexPosition");
      glLinkProgram(program);
      GLint linked;
@@ -244,18 +254,18 @@
          glDeleteProgram(program);
          return 0;
      }
-     // Shaders can be deleted after linking
      glDeleteShader(vs);
      glDeleteShader(fs);
      return program;
  }
  
  // ----------------------------------------------------------
- // GLFW scroll callback for zooming
+ // GLFW callbacks for interaction
  // ----------------------------------------------------------
+ 
+ // Scroll callback for zooming
  void scroll_callback(GLFWwindow* window, double xoffset, double yoffset)
  {
-     // Adjust zoom factor. Scrolling up zooms in.
      float zoomFactor = 1.1f;
      if (yoffset > 0)
          zoom *= zoomFactor;
@@ -263,87 +273,152 @@
          zoom /= zoomFactor;
  }
  
- // ----------------------------------------------------------
- // Resize Callback
- // ----------------------------------------------------------
+ // Framebuffer resize callback updates viewport and window size globals
  void framebuffer_size_callback(GLFWwindow* window, int width, int height)
  {
+     windowWidth = width;
+     windowHeight = height;
      glViewport(0, 0, width, height);
  }
-  
+ 
+ // Mouse button callback to start/end dragging for panning
+ void mouse_button_callback(GLFWwindow* window, int button, int action, int mods)
+ {
+     if (button == GLFW_MOUSE_BUTTON_LEFT) {
+         if (action == GLFW_PRESS) {
+             mouseDragging = true;
+             glfwGetCursorPos(window, &lastMouseX, &lastMouseY);
+         } else if (action == GLFW_RELEASE) {
+             mouseDragging = false;
+         }
+     }
+ }
+ 
+ // Cursor position callback for mouse-drag panning
+ void cursor_position_callback(GLFWwindow* window, double xpos, double ypos)
+ {
+     if (mouseDragging) {
+         double dx = xpos - lastMouseX;
+         double dy = ypos - lastMouseY;
+         lastMouseX = xpos;
+         lastMouseY = ypos;
+         // Compute world-space offset based on current zoom and window size.
+         float worldWidth = (XRANGE * 1.1f * 2.0f) / zoom;
+         float worldHeight = (0.05f * 2.0f) / zoom;
+         panX -= dx * (worldWidth / windowWidth);
+         panY += dy * (worldHeight / windowHeight);
+     }
+ }
+ 
  // ----------------------------------------------------------
- // Main
+ // Render overlay text using stb_easy_font
+ // ----------------------------------------------------------
+ void renderTextOverlay()
+ {
+     // Save current matrices and switch to orthographic projection in window space.
+     glMatrixMode(GL_PROJECTION);
+     glPushMatrix();
+     glLoadIdentity();
+     glOrtho(0, windowWidth, windowHeight, 0, -1, 1);
+     glMatrixMode(GL_MODELVIEW);
+     glPushMatrix();
+     glLoadIdentity();
+     
+     // Prepare overlay text
+     char info[256];
+     sprintf(info, "Controls: Arrow keys / Mouse drag to pan, Mouse wheel to zoom, I/K to change intensity, ESC to exit.");
+     
+     char status[128];
+     sprintf(status, "Zoom: %.2f  Intensity Boost: %.2f", zoom, intensityBoost);
+     
+     char overlay[512];
+     snprintf(overlay, sizeof(overlay), "%s\n%s", info, status);
+     
+     // Use stb_easy_font to generate vertex data for the text.
+     char buffer[99999];
+     int num_quads = stb_easy_font_print(10, windowHeight - 20, overlay, NULL, buffer, sizeof(buffer));
+     
+     glColor3f(1.0f, 1.0f, 1.0f);
+     glEnableClientState(GL_VERTEX_ARRAY);
+     glVertexPointer(2, GL_FLOAT, 16, buffer);
+     glDrawArrays(GL_QUADS, 0, num_quads * 4);
+     glDisableClientState(GL_VERTEX_ARRAY);
+     
+     // Restore previous matrices.
+     glPopMatrix();
+     glMatrixMode(GL_PROJECTION);
+     glPopMatrix();
+     glMatrixMode(GL_MODELVIEW);
+ }
+ 
+ // ----------------------------------------------------------
+ // Main function
  // ----------------------------------------------------------
  int main()
  {
-     // 1. Initialize GLFW
      if (!glfwInit()) {
          std::cerr << "Failed to initialize GLFW\n";
          return -1;
      }
      
-     GLFWwindow* window = glfwCreateWindow(800, 600, "CUDA-GL Double Slit with Shader (Pan/Zoom)", nullptr, nullptr);
+     GLFWwindow* window = glfwCreateWindow(800, 600, "Quantum Photonics Double Slit Experiment", nullptr, nullptr);
      if (!window) {
          std::cerr << "Failed to create GLFW window\n";
          glfwTerminate();
          return -1;
      }
      glfwMakeContextCurrent(window);
+     
      glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
-     // Set the scroll callback to handle zooming
      glfwSetScrollCallback(window, scroll_callback);
-  
-     // 2. Initialize GLEW
+     glfwSetMouseButtonCallback(window, mouse_button_callback);
+     glfwSetCursorPosCallback(window, cursor_position_callback);
+     
      if (glewInit() != GLEW_OK) {
          std::cerr << "Failed to initialize GLEW\n";
          glfwDestroyWindow(window);
          glfwTerminate();
          return -1;
      }
-  
-     int width, height;
-     glfwGetFramebufferSize(window, &width, &height);
-     glViewport(0, 0, width, height);
-  
-     // 3. Create VBO for photon positions
+     
+     glfwGetFramebufferSize(window, &windowWidth, &windowHeight);
+     glViewport(0, 0, windowWidth, windowHeight);
+     
+     // Create a VBO for photon positions.
      GLuint vbo;
      glGenBuffers(1, &vbo);
      glBindBuffer(GL_ARRAY_BUFFER, vbo);
      size_t bufferSize = NUM_POINTS * 2 * sizeof(float);
      glBufferData(GL_ARRAY_BUFFER, bufferSize, nullptr, GL_DYNAMIC_DRAW);
      glBindBuffer(GL_ARRAY_BUFFER, 0);
-  
-     // 4. Register VBO with CUDA
+     
+     // Register the VBO with CUDA.
      cudaGraphicsResource* cudaVboResource;
      cudaGraphicsGLRegisterBuffer(&cudaVboResource, vbo, cudaGraphicsMapFlagsWriteDiscard);
-  
-     // 5. Setup CURAND states on the GPU
+     
+     // Set up CURAND states on the GPU.
      curandState* d_rngStates = nullptr;
      cudaMalloc((void**)&d_rngStates, NUM_POINTS * sizeof(curandState));
-  
+     
      unsigned long long seed = 1234ULL;
      int grid = (NUM_POINTS + BLOCK_SIZE - 1) / BLOCK_SIZE;
      setupCurandStates<<<grid, BLOCK_SIZE>>>(d_rngStates, seed, NUM_POINTS);
      cudaDeviceSynchronize();
-  
-     // Imax is precomputed (maximum intensity at x = 0)
-     float Imax = 1.0f;
-  
-     // 6. Create and set up the shader program
+     
+     float Imax = 1.0f; // Maximum intensity at x = 0
+     
      GLuint shaderProgram = createShaderProgram();
      if (!shaderProgram) {
          std::cerr << "Failed to create shader program.\n";
          return -1;
      }
      
-     // 7. Main Loop
+     // Main loop.
      while (!glfwWindowShouldClose(window))
      {
-         // Poll events (including key presses)
          glfwPollEvents();
-  
-         // --- Update pan based on keyboard input ---
-         // Adjust pan speed relative to zoom for consistency.
+         
+         // Also allow keyboard pan.
          float panSpeed = 0.0005f / zoom;
          if (glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS)
              panX -= panSpeed;
@@ -353,14 +428,19 @@
              panY += panSpeed;
          if (glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS)
              panY -= panSpeed;
-  
-         // Map VBO for CUDA access
+         
+         // Adjust intensity boost with I/K keys.
+         if (glfwGetKey(window, GLFW_KEY_I) == GLFW_PRESS)
+             intensityBoost += 0.01f;
+         if (glfwGetKey(window, GLFW_KEY_K) == GLFW_PRESS)
+             intensityBoost = (intensityBoost > 0.02f) ? intensityBoost - 0.01f : 0.01f;
+         
+         // Generate new photons.
          cudaGraphicsMapResources(1, &cudaVboResource, 0);
          void* dPtr = nullptr;
          size_t dSize = 0;
          cudaGraphicsResourceGetMappedPointer(&dPtr, &dSize, cudaVboResource);
-  
-         // Generate new photons
+         
          generateDoubleSlitPhotons<<<grid, BLOCK_SIZE>>>(
              (float2*)dPtr,
              d_rngStates,
@@ -373,65 +453,59 @@
              Imax
          );
          cudaDeviceSynchronize();
-  
-         // Unmap so OpenGL can use the buffer
          cudaGraphicsUnmapResources(1, &cudaVboResource, 0);
-  
-         // Clear the screen
+         
          glClear(GL_COLOR_BUFFER_BIT);
-  
-         // Update the orthographic projection to incorporate pan and zoom.
+         
+         // Set up the orthographic projection based on pan and zoom.
          glMatrixMode(GL_PROJECTION);
          glLoadIdentity();
-         // The visible region is scaled by 1/zoom and shifted by panX, panY.
          float left = panX - (XRANGE * 1.1f) / zoom;
          float right = panX + (XRANGE * 1.1f) / zoom;
          float bottom = panY - (0.05f) / zoom;
          float top = panY + (0.05f) / zoom;
          glOrtho(left, right, bottom, top, -1.0, 1.0);
-  
+         
          glMatrixMode(GL_MODELVIEW);
          glLoadIdentity();
-  
-         // Use our shader program
+         
+         // Render using the shader.
          glUseProgram(shaderProgram);
-         // Set uniform values for the shader
          glUniform1f(glGetUniformLocation(shaderProgram, "wavelength"), LAMBDA);
          glUniform1f(glGetUniformLocation(shaderProgram, "slitDistance"), SLIT_DIST);
          glUniform1f(glGetUniformLocation(shaderProgram, "slitWidth"), SLIT_WIDTH);
          glUniform1f(glGetUniformLocation(shaderProgram, "screenZ"), SCREEN_Z);
          glUniform1f(glGetUniformLocation(shaderProgram, "Imax"), Imax);
-  
-         // Bind VBO and set attribute pointer for "vertexPosition"
+         glUniform1f(glGetUniformLocation(shaderProgram, "intensityBoost"), intensityBoost);
+         
          glBindBuffer(GL_ARRAY_BUFFER, vbo);
-         glEnableVertexAttribArray(0); // attribute location 0 (bound above)
+         glEnableVertexAttribArray(0);
          glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, 0);
-  
-         // Draw the points (photons)
+         
          glDrawArrays(GL_POINTS, 0, NUM_POINTS);
-  
+         
          glDisableVertexAttribArray(0);
          glBindBuffer(GL_ARRAY_BUFFER, 0);
-  
-         // Unbind shader
          glUseProgram(0);
-  
+         
+         // Render the overlay text.
+         renderTextOverlay();
+         
          glfwSwapBuffers(window);
-  
-         // Exit on Esc key
+         
          if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
              glfwSetWindowShouldClose(window, 1);
      }
-  
-     // 8. Cleanup
+     
+     // Cleanup.
      cudaFree(d_rngStates);
      cudaGraphicsUnregisterResource(cudaVboResource);
      glDeleteBuffers(1, &vbo);
      glDeleteProgram(shaderProgram);
-  
+     
      glfwDestroyWindow(window);
      glfwTerminate();
-  
+     
      return 0;
  }
  
