@@ -18,7 +18,7 @@ cp -r ../data ./
 #./tests/tests00
 
 ./src/quantum/quantum
-#./src/microscope/microscope
+./src/microscope/microscope
 # ./src/fractal/fractal
 # ./src/rnd_complex/rnd_complex
 # ./src/pde/pde
